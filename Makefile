@@ -1,11 +1,19 @@
 INCLUDES=-Iincludes/
 DEFINES=
 
-#CXX =  g++-4.2.1
-FLAGS=-MMD -g -O3
-# -fopenmp
-CFLAGS=$(FLAGS) $(INCLUDES) $(DEFINES)
+BUILD:=gcc
+
+CXX.gcc := g++
+CXX.omp := pgc++
+CXX.acc := pgc++
+
+FLAGS.gcc := -MMD -O3 -fopenmp
+FLAGS.omp := -MMD -fast -Mipa=fast,inline -mp -w
+FLAGS.acc := -MMD -fast -Mipa=fast,inline -acc -Minfo=accel -w
+
+CFLAGS=$(FLAGS.$(BUILD)) $(INCLUDES) $(DEFINES)
 CXXFLAGS=$(CFLAGS)
+
 
 LDFLAGS=$(FLAGS)
 LDLIBS=

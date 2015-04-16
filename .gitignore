@@ -1,0 +1,6 @@
+src/amgpp.d
+*.d
+*.o
+amgpp.exe
+*.exe
+*.exe
