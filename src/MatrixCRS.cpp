@@ -373,15 +373,20 @@ const MatrixCRS operator*(const MatrixCRS& lhs, const MatrixCRS& rhs) {
 	const std::size_t height = lhs.rows();
 	const std::size_t width = rhs.columns();
 	
-	unsigned int rowLengths[lhs.rows()];
+	unsigned int *rowLengths = new unsigned int[lhs.rows()];
 	
-	const IndexValuePair* const lhsValues = &lhs.values_[0];
+	const IndexValuePair* const lhsRowValues = &lhs.values_[0];
 	const std::size_t* const lhsRowIndices = &lhs.row_indices_[0];
 	const std::size_t* const lhsRowLengths = &lhs.row_lengths_[0];
 	
-	const IndexValuePair* const rhsValues = &rhs_trans.values_[0];
-	const std::size_t* const rhsRowIndices = &rhs_trans.row_indices_[0];
-	const std::size_t* const rhsRowLengths = &rhs_trans.row_lengths_[0];
+	const IndexValuePair* const rhsColValues = &rhs_trans.values_[0];
+	const std::size_t* const rhsColIndices = &rhs_trans.row_indices_[0];
+	const std::size_t* const rhsColLengths = &rhs_trans.row_lengths_[0];
+	
+	
+	const IndexValuePair* const rhsRowValues = &rhs.values_[0];
+	const std::size_t* const rhsRowIndices = &rhs.row_indices_[0];
+	const std::size_t* const rhsRowLengths = &rhs.row_lengths_[0];
 
 	
 	
@@ -393,8 +398,11 @@ const MatrixCRS operator*(const MatrixCRS& lhs, const MatrixCRS& rhs) {
 	for (std::size_t i = 0; i < height; ++i) 
 		maxNonZerosLeft = std::max(lhsRowLengths[i], maxNonZerosLeft);		
 	for (std::size_t j = 0; j < width; ++j)
-		maxNonZerosRight = std::max(rhsRowLengths[j], maxNonZerosRight);
+		maxNonZerosRight = std::max(rhsColLengths[j], maxNonZerosRight);
 	std::size_t maxWidth = std::min(maxNonZerosLeft * maxNonZerosRight, rhs.rows());
+	
+	
+	//std::cout << "size of temp 2D array : " << (maxWidth * height) << std::endl;
 	
 	IndexValuePair** newMat;
 	newMat = (IndexValuePair**)malloc(sizeof(IndexValuePair*) * height);
@@ -407,28 +415,52 @@ const MatrixCRS operator*(const MatrixCRS& lhs, const MatrixCRS& rhs) {
 	#pragma acc data create(newMat[height][maxWidth])
 	{
 		#pragma acc data copyout(rowLengths[0:lhs.rows()]) \
-			copyin(rhsValues[0:rhs_trans.values_.size()]) \
-			copin(rhsRowIndices[0:rhs_trans.row_indices_.size()]) \
-			copin(rhsRowLengths[0:rhs_trans.row_lengths_.size()]) \
-			copyin(lhsValues[0:lhs.values_.size()]) \
+			copyin(rhsColValues[0:rhs_trans.values_.size()]) \
+			copin(rhsColIndices[0:rhs_trans.row_indices_.size()]) \
+			copin(rhsColLengths[0:rhs_trans.row_lengths_.size()]) \
+			copyin(lhsRowValues[0:lhs.values_.size()]) \
 			copyin(lhsRowIndices[0:lhs.row_indices_.size()]) \
 			copyin(lhsRowLengths[0:lhs.row_lengths_.size()])
 		{
 			#pragma acc kernels
 			{
 #pragma acc loop independent
-#pragma omp parallel for
+//#pragma omp parallel for
 				for (std::size_t i = 0; i < height; ++i) {
 					rowLengths[i] = 0;
+					std::size_t lMax = lhsRowLengths[i];
+					const IndexValuePair* lPtr = &lhsRowValues[lhsRowIndices[i]];
 					
 					
-					for (std::size_t j = 0; j < width; ++j) {
+					
+					int nextCol = -1;
+					
+					while(true){
+					int minColAbove = std::numeric_limits<int>::max();
+					//(k (to find min col) + 2k (to calc product)) * k^2 cols = k^3 (or k^4 without extra storage)
+					for (std::size_t n = 0; n < lMax; ++n) {
+						std::size_t rRowMax = rhsRowLengths[lPtr[n].index_];
+						const IndexValuePair* rRowPtr = &rhsRowValues[rhsRowIndices[lPtr[n].index_]];
+						
+						
+						for(std::size_t n = 0; n < rRowMax; ++n){
+							int col = rRowPtr[n].index_;
+							if(col >= minColAbove) break;
+							if(col > nextCol)
+								minColAbove = col;
+						}
+					}
+					if(minColAbove == std::numeric_limits<int>::max()) break;
+					nextCol = minColAbove;
+					
+						std::size_t j = nextCol;
+					//for (std::size_t j = 0; j < width; ++j) {
 
-						std::size_t rMax = rhsRowLengths[j];
-						std::size_t lMax = lhsRowLengths[i];
+						std::size_t rMax = rhsColLengths[j];
+						
 					
-						const IndexValuePair* lPtr = &lhsValues[lhsRowIndices[i]];
-						const IndexValuePair* rPtr = &rhsValues[rhsRowIndices[j]];
+						
+						const IndexValuePair* rPtr = &rhsColValues[rhsColIndices[j]];
 						
 						if(lPtr[0].index_ > rPtr[rMax - 1].index_) continue;
 						if(rPtr[0].index_ > lPtr[lMax - 1].index_) continue;
@@ -484,7 +516,7 @@ const MatrixCRS operator*(const MatrixCRS& lhs, const MatrixCRS& rhs) {
 				
 				// merge sparse rows into the matrix
 				#pragma acc loop independent
-				#pragma omp parallel for
+				//#pragma omp parallel for
 				for (std::size_t i = 0; i < height; ++i) {
 					#pragma acc loop independent
 					for (std::size_t j = 0; j < rowLengths[i]; ++j){
@@ -498,7 +530,7 @@ const MatrixCRS operator*(const MatrixCRS& lhs, const MatrixCRS& rhs) {
 	
 	free(newMat[0]);
 	free(newMat);
-	
+	delete[] rowLengths;
 	std::cout << "done with mult" << std::endl;
 	return tmp;
 }
