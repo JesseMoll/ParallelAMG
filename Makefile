@@ -4,10 +4,12 @@ DEFINES=
 BUILD:=gcc
 
 CXX.gcc := g++
+CXX.seq := g++
 CXX.omp := pgc++
 CXX.acc := pgc++
 
 FLAGS.gcc := -MMD -O3 -fopenmp
+FLAGS.seq := -MMD -O3 -g
 FLAGS.omp := -MMD -fast -Mipa=fast,inline -mp -w
 FLAGS.acc := -MMD -fast -Mipa=fast,inline -acc -Minfo=accel -w
 
