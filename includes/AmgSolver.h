@@ -23,7 +23,9 @@
 #ifndef AMGSOLVER_H_
 #define AMGSOLVER_H_
 
+#include <omp.h>
 #include <vector>
+#include <map>
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
@@ -382,6 +384,7 @@ void AmgSolver<DirectSolver>::splitPoints(std::size_t level, double thetaPos, do
 		grid.St_[i].resize(A.nonzeros(i) - 1);
 	}
 
+	#pragma omp parallel for 
 	// construct adjacency lists of strong dependency subgraph
 	for (std::size_t i = 0; i < n; ++i) {
 
@@ -406,6 +409,7 @@ void AmgSolver<DirectSolver>::splitPoints(std::size_t level, double thetaPos, do
 		for (std::size_t j = A.begin(i); j < A.end(i); ++j) {
 			if (A[j].index_ != i && A[j].value_ != 0 && (A[j].value_ >= sdepThresholdPos || A[j].value_ <= sdepThresholdNeg)) {
 				grid.S_ [i          ][S_size++                ] = A[j].index_;
+				#pragma omp atomic write
 				grid.St_[A[j].index_][qualities[A[j].index_]++] = i;
 			}
 		}
@@ -645,33 +649,42 @@ bool AmgSolver<DirectSolver>::coarsenByAmg1r5(std::size_t level) {
 	MatrixCRS& P(coarsegrid.P_);
 	P = MatrixCRS(n, cpoints, capacities);
 
+
+
 	// construct prolongation/interpolation operator P
 	for (std::size_t i = 0; i < n; ++i) {
-		
-		//std::cout << i << std::endl;
 		if (grid.children_[i] != fine_point) {
 			// coarse-grid points are injected
-			P.appendRowElement(i, grid.children_[i], 1.0);
+				P.appendRowElement(i, grid.children_[i], 1.0);
 			continue;
 		}
-
-		std::size_t maxVal = std::numeric_limits<std::size_t>::max();
-		// touch all j in C_i^s and remember matrix access index in temporary array
-		//tmp_.clear();
-		//tmp_.resize(n,maxVal)
-		tmp_.resize(n);//, std::numeric_limits<std::size_t>::max());
-		std::fill(tmp_.begin(), tmp_.end(), maxVal);
 		
 		for (std::size_t j = 0; j < grid.S_[i].size(); ++j) {
 			std::size_t S_ij(grid.S_[i][j]);
-
-			if (grid.children_[S_ij] == fine_point)
-				continue;
-
-			P.appendRowElement(i, grid.children_[S_ij], 0.0);
-			tmp_[S_ij] = P.end(i) - 1;
+			if (grid.children_[S_ij] != fine_point)
+				P.appendRowElement(i, grid.children_[S_ij], 0.0);
 		}
-
+	}
+	
+	#pragma omp parallel for shared(grid, P, A, n) default(none)
+	for (std::size_t i = 0; i < n; ++i) {
+		if (grid.children_[i] != fine_point) continue;
+			
+		std::map<std::size_t, std::size_t> tmp_;
+		//std::vector<std::size_t> tmp;
+		//std::size_t maxVal = std::numeric_limits<std::size_t>::max();
+		//tmp_.resize(n);//, std::numeric_limits<std::size_t>::max());
+		//std::fill(tmp_.begin(), tmp_.end(), maxVal);
+		
+		int count = 0;
+		for (std::size_t j = 0; j < grid.S_[i].size(); ++j) {
+			std::size_t S_ij = grid.S_[i][j];
+			if (grid.children_[S_ij] != fine_point)
+				tmp_[S_ij] = P.begin(i) + count++;
+		}
+		
+		
+		
 		// distribute weakly influencing coarse- and fine-grid points to diagonal and add strongly
 		// influencing coarse-grid points to prolongation operator
 		double accu(0);   // sum weakly influencing neighbors (D_i^w) and diagonal entry in accu
@@ -686,7 +699,9 @@ bool AmgSolver<DirectSolver>::coarsenByAmg1r5(std::size_t level) {
 			else if (jS < grid.S_[i].size() && grid.S_[i][jS] == j) {
 				if (grid.children_[j] != fine_point) {
 					// j is in the strongly influencing neighboring coarse interpolatory set C_i^s
-					P.getValue(tmp_[j]) -= A[jA].value_;
+					double subVal = A[jA].value_;
+					double& val = P.getValue(tmp_[j]);
+					val -= subVal;
 				}
 				else {
 					// j is in the strongly influencing neighboring fine-grid point set F_i^s
@@ -719,8 +734,12 @@ bool AmgSolver<DirectSolver>::coarsenByAmg1r5(std::size_t level) {
 
 					v *= A[jA].value_ / sum;
 
-					for (std::size_t k = 0; k < v.size(); ++k)
-						P.getValue(P.begin(i) + k) -= v[k];
+					for (std::size_t k = 0; k < v.size(); ++k){
+						
+						double subVal = v[k];
+						double& val = P.getValue(P.begin(i) + k);
+						val -= subVal;
+					}
 				}
 
 				++jA;
@@ -733,8 +752,13 @@ bool AmgSolver<DirectSolver>::coarsenByAmg1r5(std::size_t level) {
 		}
 
 		accu = 1.0 / accu;
-		for (std::size_t jP = P.begin(i); jP < P.end(i); ++jP)
-			P.getValue(jP) *= accu;
+		for (std::size_t jP = P.begin(i); jP < P.end(i); ++jP){
+
+			double& val = P.getValue(jP);
+					
+			val *= accu;
+		}
+		
 	}
 std::cout << "computing product" << std::endl;
 	computeGalerkinProduct(P, A, grid.R_, coarsegrid.system_.A_);
@@ -810,7 +834,7 @@ bool AmgSolver<DirectSolver>::coarsenByDirectInterpolation(std::size_t level) {
 		std::cout << "Setting up interpolation operator..." << std::endl;
 
 	// allocate prolongation/interpolation operator P
-	std::vector<std::size_t>& capacities(tmp_);
+	std::vector<std::size_t> capacities(n);
 	capacities.resize(n);
 	for (std::size_t i = 0; i < n; ++i) {
 		if (grid.children_[i] != fine_point)
