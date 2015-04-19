@@ -122,9 +122,9 @@ void setupPoisson(Lse& system, int n) {
 		double x = (1 + i % (n - 1)) * h;
 		double y = (1 + i / (n - 1)) * h;
 
-		if (i % (n-1) == 0)
-			fout << std::endl;
-		fout << x << " " << y << " " << (x*x - x*x*x*x)*(y*y*y*y-y*y) << std::endl;
+		//if (i % (n-1) == 0)
+		//	fout << std::endl;
+		//fout << x << " " << y << " " << (x*x - x*x*x*x)*(y*y*y*y-y*y) << std::endl;
 	}
 	fout.close();
 }
@@ -135,12 +135,25 @@ void outputGrid(Lse& system, int nDim, double hx = 1.0, double hy = 1.0) {
 	int mDim = N / nDim;
 
 	std::ofstream fout("solution.dat");
+	int numPoints = nDim * mDim;
+	double sumOfErrSquared = 0;
 	for (std::size_t i = 1; i <= nDim; ++i) {
 		fout << '\n';
-		for (std::size_t j = 1; j <= mDim; ++j)
-			fout << j * hx << " " << i * hy << " " << system.x_[(i - 1) * mDim + (j - 1)] << std::endl;
+		for (std::size_t j = 1; j <= mDim; ++j){
+			
+			double x = j * hx;
+			double y = i * hx;
+		
+			double reference = (x*x - x*x*x*x)*(y*y*y*y-y*y);
+			double calculated = system.x_[(i - 1) * mDim + (j - 1)];
+			
+			sumOfErrSquared += (reference - calculated) * (reference - calculated);
+			//fout << x << " " << y << " " << calculated << std::endl;
+		}
+			
 	}
 	fout.close();
+	std::cout << "Mean Error Squared = " << sumOfErrSquared / numPoints << std::endl;
 }
 
 
